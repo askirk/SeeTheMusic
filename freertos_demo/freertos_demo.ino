@@ -19,23 +19,11 @@ SemaphoreHandle_t xSerialSemaphore;
 // Microphone connects to Analog Pin 0.  Corresponding ADC channel number
 // varies among boards...it's ADC0 on Uno and Mega, ADC7 on Leonardo.
 // Other boards may require different settings; refer to datasheet.
-#define ADC_CHANNEL 0
+#define ADC_SOUND_CHANNEL 0
+#define ADC_LIGHT_CHANNEL 1
+#define BUTTON_PIN 8
 
 const int sampleWindow = 5; 
-
-/*
-These tables were arrived at through testing, modeling and trial and error,
-exposing the unit to assorted music and sounds.  But there's no One Perfect
-EQ Setting to Rule Them All, and the graph may respond better to some
-inputs than others.  The software works at making the graph interesting,
-but some columns will always be less lively than others, especially
-comparing live speech against ambient music of varying genres.
-*/
-
-// define two tasks for Blink & AnalogRead
-void TaskBlink( void *pvParameters );
-void AudioSample(void *pvParameters);
-void TaskLightShow(void *pvParameters);
 
 //Queue
 QueueHandle_t xQueue1;
@@ -55,31 +43,46 @@ void setup() {
   // initialize serial communication at 9600 bits per second:
   Serial.begin(9600);
 
+  pinMode(BUTTON_PIN, INPUT_PULLUP);  
+
   strip.begin();
   strip.setBrightness(32);
   strip.show(); // Initialize all pixels to 'off'
 
   xQueue1 = xQueueCreate( FFT_N, sizeof( int16_t ) );
 
-  if ( xSerialSemaphore == NULL )  // Check to confirm that the Serial Semaphore has not already been created.
-  {
-    xSerialSemaphore = xSemaphoreCreateMutex();  // Create a mutex semaphore we will use to manage the Serial Port
-    if ( ( xSerialSemaphore ) != NULL )
-      xSemaphoreGive( ( xSerialSemaphore ) );  // Make the Serial Port available for use, by "Giving" the Semaphore.
-  }
+  
+   //Now set up two tasks to run independently.
+    xTaskCreate(
+    TaskReadSound
+    ,  (const portCHAR *) "Sound"   // A name just for humans
+    ,  128  // Stack size
+    ,  NULL
+    ,  2 // priority
+    ,  NULL );
+    
+    
+    /* Now set up two tasks to run independently.
+    xTaskCreate(
+    TaskReadLight
+    ,  (const portCHAR *) "Light"   // A name just for humans
+    ,  128  // Stack size
+    ,  NULL
+    ,  1  // priority
+    ,  NULL );*/
 
-  // Now set up two tasks to run independently.
-  xTaskCreate(
-    TaskAnalogRead
-    ,  (const portCHAR *) "Sample"   // A name just for humans
+    xTaskCreate(
+    TaskLightShow
+    ,  (const portCHAR *) "Show"   // A name just for humans
     ,  128  // Stack size
     ,  NULL
     ,  2  // priority
     ,  NULL );
 
+    
     xTaskCreate(
-    TaskLightShow
-    ,  (const portCHAR *) "Blink"   // A name just for humans
+    TaskDigitalRead
+    ,  (const portCHAR *) "Button"   // A name just for humans
     ,  128  // Stack size
     ,  NULL
     ,  2  // priority
@@ -97,27 +100,6 @@ void loop()
 /*--------------------------------------------------*/
 /*---------------------- Tasks ---------------------*/
 /*--------------------------------------------------*/
-void TaskBlink(void *pvParameters)  // This is a task.
-{
-  (void) pvParameters;
-  
-
-  int i = 0;
-  for(;;){
-    if(i > 11)
-      i = 0;
-    strip.setPixelColor(i, 255, 0, 255);
-    if(i != 0)
-      strip.setPixelColor(i-1, 0, 0, 0);
-    else
-      strip.setPixelColor(11, 0, 0, 0);
-    strip.show();
-    i++;
-
-    vTaskDelay( 50 / portTICK_PERIOD_MS );
-  }
-}
-
 
 void TaskLightShow(void *pvParameters)  // This is a task.
 {
@@ -134,17 +116,14 @@ void TaskLightShow(void *pvParameters)  // This is a task.
       {
         // Receive a message on the created queue.  Block for 10 ticks if a
         // message is not immediately available.
-        if( xQueueReceive( xQueue1, &( scaled ), ( TickType_t ) 0 ) )
+        if( xQueueReceive( xQueue1, &( scaled ), ( TickType_t ) 30 ) )
         {
             // pcRxedMessage now points to the struct AMessage variable posted
             // by vATask.
         }
       }
       if(scaled >= 0 && scaled <= 240){
-        //scaled = scaled % 12;
         scaled = map(scaled, 0, 130, 0, 11);
-        //Serial.println("scaled"+scaled);
-        //scaled = (11.0/(80.0 - 60.0)) * (scaled - (80.0 - 60.0)) + 11;
 
         for(i = 0; i < 12; i++){
           if(i <= scaled){
@@ -159,16 +138,16 @@ void TaskLightShow(void *pvParameters)  // This is a task.
             strip.setPixelColor(i, 0, 0, 0);
           }
         }
-
+        
         strip.show();
       }
     }
    
-    vTaskDelay( 50 / portTICK_PERIOD_MS ); // wait .5 s
+    vTaskDelay( 205 / portTICK_PERIOD_MS ); // wait .5 s
   }
 }
 
-void TaskAnalogRead(void *pvParameters)  // This is a task.
+void TaskReadSound(void *pvParameters)  // This is a task.
 {
   (void) pvParameters;
  
@@ -184,7 +163,7 @@ void TaskAnalogRead(void *pvParameters)  // This is a task.
       // collect data for 50 mS
       while (millis() - startMillis < sampleWindow)
       {
-        sample = analogRead(ADC_CHANNEL);
+        sample = analogRead(ADC_SOUND_CHANNEL);
         if (sample < 1024) // toss out spurious readings
         {
           if (sample > signalMax){
@@ -196,13 +175,46 @@ void TaskAnalogRead(void *pvParameters)  // This is a task.
       }
 
       peakToPeak = signalMax - signalMin; // max - min = peak-peak amplitude
-     
-      // print out the value you read:
       Serial.println(peakToPeak);
+
       xQueueSend( xQueue1, ( void * ) &peakToPeak, ( TickType_t ) 0 );
+
+      unsigned int brightness = analogRead(ADC_LIGHT_CHANNEL);
+      map(brightness, 0, 1023, 0, 255);
+      strip.setBrightness(brightness);
+      strip.show();
     }
     
-    vTaskDelay(50 / portTICK_PERIOD_MS);  // one tick delay (1ms) in between reads for stability
+    vTaskDelay(205 / portTICK_PERIOD_MS);  // one tick delay (1ms) in between reads for stability
+  }
+}
+
+void TaskReadLight(void *pvParameters)  // This is a task.
+{
+  (void) pvParameters;
+ 
+  for (;;)
+  {
+    unsigned int brightness = 0; 
+    //brightness = analogRead(ADC_LIGHT_CHANNEL);
+   
+    // print out the value you read:
+    Serial.println("hello");
+    
+    vTaskDelay(205 / portTICK_PERIOD_MS);  // one tick delay (1ms) in between reads for stability
+  }
+}
+
+void TaskDigitalRead(void *pvParameters)  // This works.
+{
+  (void) pvParameters;
+ 
+  for (;;)
+  {
+    // print out the value you read:
+    //Serial.println(digitalRead(BUTTON_PIN));
+    
+    vTaskDelay(205 / portTICK_PERIOD_MS);
   }
 }
 
