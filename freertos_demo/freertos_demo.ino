@@ -24,6 +24,8 @@ SemaphoreHandle_t xSerialSemaphore;
 #define BUTTON_PIN 8
 
 const int sampleWindow = 5; 
+enum MODE {EQ, COUNT, QUAD};
+MODE LightMode = EQ;
 
 //Queue
 QueueHandle_t xQueue1;
@@ -52,28 +54,19 @@ void setup() {
   xQueue1 = xQueueCreate( FFT_N, sizeof( int16_t ) );
 
   
-   //Now set up two tasks to run independently.
+    // Now set up three tasks to run independently.
+   
     xTaskCreate(
-    TaskReadSound
-    ,  (const portCHAR *) "Sound"   // A name just for humans
+    TaskAnalogRead
+    ,  (const portCHAR *) "Analog"   
     ,  128  // Stack size
     ,  NULL
     ,  2 // priority
     ,  NULL );
     
-    
-    /* Now set up two tasks to run independently.
-    xTaskCreate(
-    TaskReadLight
-    ,  (const portCHAR *) "Light"   // A name just for humans
-    ,  128  // Stack size
-    ,  NULL
-    ,  1  // priority
-    ,  NULL );*/
-
     xTaskCreate(
     TaskLightShow
-    ,  (const portCHAR *) "Show"   // A name just for humans
+    ,  (const portCHAR *) "Display"   
     ,  128  // Stack size
     ,  NULL
     ,  2  // priority
@@ -82,13 +75,13 @@ void setup() {
     
     xTaskCreate(
     TaskDigitalRead
-    ,  (const portCHAR *) "Button"   // A name just for humans
+    ,  (const portCHAR *) "Digital"
     ,  128  // Stack size
     ,  NULL
     ,  2  // priority
     ,  NULL );
 
-  // Now the task scheduler, which takes over control of scheduling individual tasks, is automatically started.
+  // Now the task scheduler, which takes over control of scheduling individual tasks, is started.
   vTaskStartScheduler();
 }
 
@@ -107,49 +100,83 @@ void TaskLightShow(void *pvParameters)  // This is a task.
 
   int scaled;
   int i = 0;
+  int pointer = 0;
 
   for (;;) // A Task shall never return or exit.
   {
-    if ( true )
+  
+    if( xQueue1 != 0 )
     {
-      if( xQueue1 != 0 )
+      // Receive a message on the created queue.  Block for 10 ticks if a
+      // message is not immediately available.
+      if( xQueueReceive( xQueue1, &( scaled ), ( TickType_t ) 30 ) )
       {
-        // Receive a message on the created queue.  Block for 10 ticks if a
-        // message is not immediately available.
-        if( xQueueReceive( xQueue1, &( scaled ), ( TickType_t ) 30 ) )
-        {
-            // pcRxedMessage now points to the struct AMessage variable posted
-            // by vATask.
-        }
+          // pcRxedMessage now points to the struct AMessage variable posted
+          // by vATask.
       }
-      if(scaled >= 0 && scaled <= 240){
-        scaled = map(scaled, 0, 130, 0, 11);
+    }
+    if(scaled >= 0 && scaled <= 240){
 
+      if(LightMode == EQ){
+        int EQ_scaled = map(scaled, 0, 240, 0, 11);
         for(i = 0; i < 12; i++){
-          if(i <= scaled){
+          if(i <= EQ_scaled){
             if(i < 4){
-              strip.setPixelColor(i, 0, 255, 0); // turn on
+              strip.setPixelColor(i, 0, 255, 0); // turn on GREEN
             }else if(i < 8){
-              strip.setPixelColor(i, 255, 255, 0); // turn on
+              strip.setPixelColor(i, 255, 255, 0); // turn on YELLOW
             }else{
-              strip.setPixelColor(i, 255, 0, 0); // turn on
+              strip.setPixelColor(i, 255, 0, 0); // turn on RED
             }
           }else{
             strip.setPixelColor(i, 0, 0, 0);
           }
         }
+      }else if(LightMode == COUNT){
+        int COUNT_scaled = map(scaled, 0, 240, 0, 11);
+        int counter = pointer + COUNT_scaled;
+        for(i = 0; i < 12; i++){
+          if(i >= pointer && i <= counter && counter <= 11){
+            strip.setPixelColor(i, 255/i, 20*i, i*12); // turn on variable color
+            pointer = i;
+          }else if(i <= counter % 11 && counter > 11){
+            strip.setPixelColor(i, 255/i, 20*i, i*12); // turn on variable color
+            pointer = i;
+          }else{
+            strip.setPixelColor(i, 0, 0, 0); // turn off
+          }
+        }
+      }else{ // LightMode == QUAD
+        int QUAD_scaled = map(scaled, 0, 130, 0, 11);
         
-        strip.show();
-      }
+        for(int z = 0; z < 4; z++){
+          strip.setPixelColor(3*z, 255, 0, 0); // red
+          if(QUAD_scaled % 3 >= 1){
+            strip.setPixelColor(3*z + 1, 25, 25, 112); // blue
+          }else{
+            strip.setPixelColor(3*z + 1, 0, 0, 0); // off
+          }
+          if(QUAD_scaled % 3 == 2){
+            strip.setPixelColor(3*z + 2, 255, 0, 255); // purple
+          }else{
+            strip.setPixelColor(3*z + 2, 0, 0, 0); // off
+          }
+        }
+      }    
+      
+      strip.show();
     }
-   
-    vTaskDelay( 205 / portTICK_PERIOD_MS ); // wait .5 s
+  
+ 
+    vTaskDelay( 70 / portTICK_PERIOD_MS ); // wait .07 s
   }
 }
 
-void TaskReadSound(void *pvParameters)  // This is a task.
+void TaskAnalogRead(void *pvParameters)  // This is a task.
 {
   (void) pvParameters;
+
+  int prev_brightness = 0;
  
   for (;;)
   {
@@ -160,7 +187,7 @@ void TaskReadSound(void *pvParameters)  // This is a task.
       unsigned int signalMax = 0;
       unsigned int signalMin = 1023;
       unsigned int sample;
-      // collect data for 50 mS
+      // collect data for 5 mS
       while (millis() - startMillis < sampleWindow)
       {
         sample = analogRead(ADC_SOUND_CHANNEL);
@@ -175,46 +202,56 @@ void TaskReadSound(void *pvParameters)  // This is a task.
       }
 
       peakToPeak = signalMax - signalMin; // max - min = peak-peak amplitude
-      Serial.println(peakToPeak);
 
       xQueueSend( xQueue1, ( void * ) &peakToPeak, ( TickType_t ) 0 );
 
-      unsigned int brightness = analogRead(ADC_LIGHT_CHANNEL);
+      int brightness = analogRead(ADC_LIGHT_CHANNEL);
       map(brightness, 0, 1023, 0, 255);
-      strip.setBrightness(brightness);
-      strip.show();
+
+      Serial.println(abs(brightness - prev_brightness));
+      if(abs(brightness - prev_brightness) > 2){
+        strip.setBrightness(brightness);
+      }
+
+      prev_brightness = brightness;
+    
     }
     
-    vTaskDelay(205 / portTICK_PERIOD_MS);  // one tick delay (1ms) in between reads for stability
+    vTaskDelay(70 / portTICK_PERIOD_MS);  // .07 sec in between reads for quick response
   }
 }
 
-void TaskReadLight(void *pvParameters)  // This is a task.
+void TaskDigitalRead(void *pvParameters)
 {
   (void) pvParameters;
+  bool press = false;
+  unsigned long debounce_start; // have to debounce the button
  
   for (;;)
   {
-    unsigned int brightness = 0; 
-    //brightness = analogRead(ADC_LIGHT_CHANNEL);
-   
-    // print out the value you read:
-    Serial.println("hello");
+    int val = digitalRead(BUTTON_PIN);
+
+    if(val > 0 && press == false){
+      press = true;
+      debounce_start = millis();
+      changeMode();
+    }else if (val == 0 && press == true){
+      if(millis() - debounce_start >= 500){ // debounce for 500 ms
+        press = false;
+      }
+    }
     
-    vTaskDelay(205 / portTICK_PERIOD_MS);  // one tick delay (1ms) in between reads for stability
+    vTaskDelay(205 / portTICK_PERIOD_MS); // check again in 205 ms
   }
 }
 
-void TaskDigitalRead(void *pvParameters)  // This works.
-{
-  (void) pvParameters;
- 
-  for (;;)
-  {
-    // print out the value you read:
-    //Serial.println(digitalRead(BUTTON_PIN));
-    
-    vTaskDelay(205 / portTICK_PERIOD_MS);
+void changeMode(){ // subroutine to change mode
+  if(LightMode == EQ){
+    LightMode = COUNT;
+  }else if(LightMode == COUNT){
+    LightMode = QUAD;
+  }else{
+    LightMode = EQ;
   }
 }
 
