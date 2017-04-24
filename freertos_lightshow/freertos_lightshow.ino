@@ -1,31 +1,19 @@
 #include <Arduino_FreeRTOS.h>
 #include <Adafruit_NeoPixel.h>
 #include <semphr.h>  // add the FreeRTOS functions for Semaphores (or Flags).
-
-// IMPORTANT: FFT_N should be #defined as 128 in ffft.h.
-
-// Declare a mutex Semaphore Handle which we will use to manage the Serial Port.
-// It will be used to ensure only only one Task is accessing this resource at any time.
-SemaphoreHandle_t xSerialSemaphore;
-
 #include <avr/pgmspace.h>
 #include <ffft.h>
 #include <math.h>
 #include <Wire.h>
 
-// PIN for NeoPixel Ring
-#define PIN 6
-
-// Microphone connects to Analog Pin 0.  Corresponding ADC channel number
-// varies among boards...it's ADC0 on Uno and Mega, ADC7 on Leonardo.
-// Other boards may require different settings; refer to datasheet.
-#define ADC_SOUND_CHANNEL 0
-#define ADC_LIGHT_CHANNEL 1
-#define BUTTON_PIN 8
+#define RING_PIN 6               // PIN for NeoPixel Ring
+#define ADC_SOUND_CHANNEL 0 // PIN for Microphone AMP
+#define ADC_LIGHT_CHANNEL 1 // PIN for Photoresistor
+#define BUTTON_PIN 8        // PIN for Pushbutton
 
 const int sampleWindow = 5; 
 enum MODE {EQ, COUNT, QUAD};
-MODE LightMode = EQ;
+MODE LightMode = EQ; // Global light mode
 
 //Queue
 QueueHandle_t xQueue1;
@@ -37,13 +25,11 @@ QueueHandle_t xQueue1;
 //   NEO_KHZ400  400 KHz (classic 'v1' (not v2) FLORA pixels, WS2811 drivers)
 //   NEO_GRB     Pixels are wired for GRB bitstream (most NeoPixel products)
 //   NEO_RGB     Pixels are wired for RGB bitstream (v1 FLORA pixels, not v2)
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(12, PIN, NEO_GRB + NEO_KHZ800);
+// Learned from https://learn.adafruit.com/adafruit-neopixel-uberguide/arduino-library
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(12, RING_PIN, NEO_GRB + NEO_KHZ800);
 
 // the setup function runs once when you press reset or power the board
 void setup() {
-
-  // initialize serial communication at 9600 bits per second:
-  Serial.begin(9600);
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);  
 
@@ -54,32 +40,32 @@ void setup() {
   xQueue1 = xQueueCreate( FFT_N, sizeof( int16_t ) );
 
   
-    // Now set up three tasks to run independently.
-   
-    xTaskCreate(
-    TaskAnalogRead
-    ,  (const portCHAR *) "Analog"   
-    ,  128  // Stack size
-    ,  NULL
-    ,  2 // priority
-    ,  NULL );
-    
-    xTaskCreate(
-    TaskLightShow
-    ,  (const portCHAR *) "Display"   
-    ,  128  // Stack size
-    ,  NULL
-    ,  2  // priority
-    ,  NULL );
+  // Now set up three tasks
+ 
+  xTaskCreate(
+  TaskAnalogRead
+  ,  (const portCHAR *) "Analog"   
+  ,  128  // Stack size
+  ,  NULL
+  ,  2 // priority
+  ,  NULL );
+  
+  xTaskCreate(
+  TaskLightShow
+  ,  (const portCHAR *) "Display"   
+  ,  128  // Stack size
+  ,  NULL
+  ,  2  // priority
+  ,  NULL );
 
-    
-    xTaskCreate(
-    TaskDigitalRead
-    ,  (const portCHAR *) "Digital"
-    ,  128  // Stack size
-    ,  NULL
-    ,  2  // priority
-    ,  NULL );
+  
+  xTaskCreate(
+  TaskDigitalRead
+  ,  (const portCHAR *) "Digital"
+  ,  128  // Stack size
+  ,  NULL
+  ,  2  // priority
+  ,  NULL );
 
   // Now the task scheduler, which takes over control of scheduling individual tasks, is started.
   vTaskStartScheduler();
@@ -104,15 +90,15 @@ void TaskLightShow(void *pvParameters)  // This is a task.
 
   for (;;) // A Task shall never return or exit.
   {
+   
   
     if( xQueue1 != 0 )
     {
-      // Receive a message on the created queue.  Block for 10 ticks if a
+      // Receive a message on the created queue.  Block for 30 ticks if a
       // message is not immediately available.
       if( xQueueReceive( xQueue1, &( scaled ), ( TickType_t ) 30 ) )
       {
-          // pcRxedMessage now points to the struct AMessage variable posted
-          // by vATask.
+          // blank
       }
     }
     if(scaled >= 0 && scaled <= 240){
@@ -166,7 +152,6 @@ void TaskLightShow(void *pvParameters)  // This is a task.
       
       strip.show();
     }
-  
  
     vTaskDelay( 70 / portTICK_PERIOD_MS ); // wait .07 s
   }
@@ -180,6 +165,7 @@ void TaskAnalogRead(void *pvParameters)  // This is a task.
  
   for (;;)
   {
+    
     if ( true )
     {
       unsigned long startMillis= millis(); // Start of sample window
@@ -188,6 +174,7 @@ void TaskAnalogRead(void *pvParameters)  // This is a task.
       unsigned int signalMin = 1023;
       unsigned int sample;
       // collect data for 5 mS
+      // code adapted from https://learn.adafruit.com/adafruit-agc-electret-microphone-amplifier-max9814/overview 
       while (millis() - startMillis < sampleWindow)
       {
         sample = analogRead(ADC_SOUND_CHANNEL);
@@ -207,8 +194,7 @@ void TaskAnalogRead(void *pvParameters)  // This is a task.
 
       int brightness = analogRead(ADC_LIGHT_CHANNEL);
       map(brightness, 0, 1023, 0, 255);
-
-      Serial.println(abs(brightness - prev_brightness));
+      
       if(abs(brightness - prev_brightness) > 2){
         strip.setBrightness(brightness);
       }
@@ -229,6 +215,9 @@ void TaskDigitalRead(void *pvParameters)
  
   for (;;)
   {
+    unsigned long time = millis();
+    Serial.println(time);
+    
     int val = digitalRead(BUTTON_PIN);
 
     if(val > 0 && press == false){
